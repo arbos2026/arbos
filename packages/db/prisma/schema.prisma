@@ -1,0 +1,689 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id                String          @id @default(cuid())
+  phone             String          @unique
+  email             String?         @unique
+  name              String?
+  avatar_url        String?
+  city              String?
+  country           String          @default("KG")
+  experience_level  ExperienceLevel @default(BEGINNER)
+  risk_profile      RiskProfile     @default(MODERATE)
+  capital_range     CapitalRange?
+  preferred_cats    String[]
+  plan              Plan            @default(FREE)
+  telegram_id       BigInt?         @unique
+  telegram_username String?
+  referral_code     String          @unique @default(cuid())
+  referred_by_id    String?
+  is_verified       Boolean         @default(false)
+  onboarding_done   Boolean         @default(false)
+  created_at        DateTime        @default(now())
+  updated_at        DateTime        @updatedAt
+
+  sessions          Session[]
+  subscriptions     Subscription[]
+  journal           TradeJournalEntry[]
+  alerts            Alert[]
+  coach_sessions    AICoachSession[]
+  notifications     Notification[]
+  referrals_given   Referral[]      @relation("referrer")
+  referral_received Referral?       @relation("referred")
+
+  @@map("users")
+}
+
+enum ExperienceLevel {
+  BEGINNER
+  INTERMEDIATE
+  EXPERT
+}
+
+enum RiskProfile {
+  CONSERVATIVE
+  MODERATE
+  AGGRESSIVE
+}
+
+enum CapitalRange {
+  UNDER_500
+  RANGE_500_2K
+  RANGE_2K_10K
+  OVER_10K
+}
+
+enum Plan {
+  FREE
+  SCOUT
+  PRO
+  EXPERT
+}
+
+model Session {
+  id            String   @id @default(cuid())
+  user_id       String
+  refresh_token String   @unique
+  ip_address    String?
+  user_agent    String?
+  expires_at    DateTime
+  created_at    DateTime @default(now())
+
+  user          User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@map("sessions")
+}
+
+model OTPCode {
+  id         String   @id @default(cuid())
+  phone      String
+  code       String
+  attempts   Int      @default(0)
+  expires_at DateTime
+  used       Boolean  @default(false)
+  created_at DateTime @default(now())
+
+  @@index([phone])
+  @@map("otp_codes")
+}
+
+model Subscription {
+  id          String    @id @default(cuid())
+  user_id     String
+  plan        Plan
+  status      SubStatus @default(ACTIVE)
+  started_at  DateTime  @default(now())
+  expires_at  DateTime
+  auto_renew  Boolean   @default(true)
+  amount_paid Decimal   @db.Decimal(10, 2)
+  currency    String    @default("USD")
+  payment_ref String?
+  created_at  DateTime  @default(now())
+
+  user        User      @relation(fields: [user_id], references: [id])
+
+  @@index([user_id])
+  @@map("subscriptions")
+}
+
+enum SubStatus {
+  ACTIVE
+  CANCELLED
+  EXPIRED
+  TRIAL
+  PAST_DUE
+}
+
+model Referral {
+  id           String         @id @default(cuid())
+  referrer_id  String
+  referred_id  String         @unique
+  status       ReferralStatus @default(PENDING)
+  reward_given Boolean        @default(false)
+  created_at   DateTime       @default(now())
+
+  referrer     User           @relation("referrer", fields: [referrer_id], references: [id])
+  referred     User           @relation("referred", fields: [referred_id], references: [id])
+
+  @@map("referrals")
+}
+
+enum ReferralStatus {
+  PENDING
+  CONVERTED
+  REWARDED
+}
+
+model Supplier {
+  id                String       @id @default(cuid())
+  name              String
+  country           String
+  city              String?
+  telegram_id       BigInt?      @unique
+  telegram_username String?
+  contact_phone     String?
+  contact_email     String?
+  description       String?
+  rating            Decimal      @default(0) @db.Decimal(3, 2)
+  review_count      Int          @default(0)
+  verified          Boolean      @default(false)
+  plan              SupplierPlan @default(BASIC)
+  weekly_views      Int          @default(0)
+  monthly_inquiries Int          @default(0)
+  bot_registered    Boolean      @default(false)
+  last_price_update DateTime?
+  created_at        DateTime     @default(now())
+  updated_at        DateTime     @updatedAt
+
+  category_links    SupplierCategory[]
+  prices            Price[]
+  bot_submissions   BotSubmission[]
+  reviews           SupplierReview[]
+
+  @@map("suppliers")
+}
+
+enum SupplierPlan {
+  BASIC
+  PREMIUM
+}
+
+model SupplierCategory {
+  supplier_id  String
+  category_id  String
+  min_qty      Decimal? @db.Decimal(12, 3)
+  min_qty_unit String?
+
+  supplier     Supplier @relation(fields: [supplier_id], references: [id], onDelete: Cascade)
+  category     Category @relation(fields: [category_id], references: [id])
+
+  @@id([supplier_id, category_id])
+  @@map("supplier_categories")
+}
+
+model SupplierReview {
+  id          String   @id @default(cuid())
+  supplier_id String
+  reviewer_id String
+  rating      Int
+  comment     String?
+  created_at  DateTime @default(now())
+
+  supplier    Supplier @relation(fields: [supplier_id], references: [id])
+
+  @@unique([supplier_id, reviewer_id])
+  @@map("supplier_reviews")
+}
+
+model Category {
+  id             String             @id @default(cuid())
+  name_ru        String
+  name_en        String
+  slug           String             @unique
+  parent_id      String?
+  icon_emoji     String?
+  hs_code_prefix String?
+  sort_order     Int                @default(0)
+
+  parent         Category?          @relation("Tree", fields: [parent_id], references: [id])
+  children       Category[]         @relation("Tree")
+  products       Product[]
+  supplier_links SupplierCategory[]
+
+  @@map("categories")
+}
+
+model Product {
+  id          String      @id @default(cuid())
+  name_ru     String
+  name_en     String?
+  slug        String      @unique
+  category_id String
+  hs_code     String?
+  unit        ProductUnit @default(KG)
+  aliases     String[]
+  is_active   Boolean     @default(true)
+  created_at  DateTime    @default(now())
+
+  category        Category            @relation(fields: [category_id], references: [id])
+  prices          Price[]
+  arb_windows     ArbitrageWindow[]
+  alerts          Alert[]
+  journal_entries TradeJournalEntry[]
+
+  @@index([category_id])
+  @@map("products")
+}
+
+enum ProductUnit {
+  KG
+  TONNE
+  PCS
+  BOX
+  SET
+  LITRE
+}
+
+model Price {
+  id           String          @id @default(cuid())
+  product_id   String
+  supplier_id  String?
+  marketplace  Marketplace?
+  source_type  PriceSourceType
+  price        Decimal         @db.Decimal(14, 4)
+  currency     Currency        @default(USD)
+  price_usd    Decimal         @db.Decimal(14, 4)
+  unit         ProductUnit     @default(KG)
+  min_qty      Decimal?        @db.Decimal(12, 3)
+  min_qty_unit String?
+  confidence   ConfidenceLevel @default(AGED)
+  is_buy_side  Boolean         @default(false)
+  listing_url  String?
+  metadata     Json?
+  expires_at   DateTime?
+  updated_at   DateTime        @default(now()) @updatedAt
+  created_at   DateTime        @default(now())
+
+  product      Product         @relation(fields: [product_id], references: [id])
+  supplier     Supplier?       @relation(fields: [supplier_id], references: [id])
+  history      PriceHistory[]
+
+  @@index([product_id, is_buy_side, confidence])
+  @@index([marketplace, updated_at])
+  @@map("prices")
+}
+
+model PriceHistory {
+  id          String          @id @default(cuid())
+  price_id    String
+  price_usd   Decimal         @db.Decimal(14, 4)
+  confidence  ConfidenceLevel
+  recorded_at DateTime        @default(now())
+
+  price_ref   Price           @relation(fields: [price_id], references: [id], onDelete: Cascade)
+
+  @@index([price_id, recorded_at])
+  @@map("price_history")
+}
+
+enum Marketplace {
+  KASPI_KZ
+  WILDBERRIES_KZ
+  WILDBERRIES_RU
+  OZON_KZ
+  OZON_RU
+  YANDEX_MARKET
+  UZUM_UZ
+  OLX_KZ
+  OLX_UZ
+  ALIBABA
+  ALIEXPRESS
+  SHOP_1688
+  DHGATE
+  MADE_IN_CHINA
+  DORDOY_MARKET
+  BARAKHOL_KA
+  FERGANA_MARKET
+  KASHGAR_MARKET
+}
+
+enum PriceSourceType {
+  BOT_SUBMISSION
+  PARSER_AUTO
+  AGENT_MANUAL
+  API_PARTNER
+}
+
+enum Currency {
+  USD
+  KZT
+  KGS
+  UZS
+  CNY
+  RUB
+  AED
+  TRY
+}
+
+enum ConfidenceLevel {
+  LIVE
+  FRESH
+  AGED
+  STALE
+}
+
+model ArbitrageWindow {
+  id                  String           @id @default(cuid())
+  product_id          String
+  buy_marketplace     Marketplace?
+  buy_country         String
+  sell_marketplace    Marketplace
+  buy_price_usd       Decimal          @db.Decimal(10, 4)
+  sell_price_usd      Decimal          @db.Decimal(10, 4)
+  logistics_usd       Decimal          @db.Decimal(10, 4)
+  customs_usd         Decimal          @db.Decimal(10, 4)
+  marketplace_fee_pct Decimal          @db.Decimal(5, 2)
+  net_margin_usd      Decimal          @db.Decimal(10, 4)
+  margin_pct          Decimal          @db.Decimal(6, 2)
+  roi                 Decimal          @db.Decimal(6, 2)
+  risk_score          Int
+  competition_level   CompetitionLevel
+  seasonal_score      Decimal          @db.Decimal(4, 3)
+  trend               PriceTrend
+  confidence          ConfidenceLevel
+  is_active           Boolean          @default(true)
+  calculated_at       DateTime         @default(now())
+  expires_at          DateTime?
+
+  product             Product          @relation(fields: [product_id], references: [id])
+
+  @@index([product_id, margin_pct(sort: Desc)])
+  @@index([sell_marketplace, is_active])
+  @@map("arbitrage_windows")
+}
+
+enum CompetitionLevel {
+  LOW
+  MEDIUM
+  HIGH
+  SATURATED
+}
+
+enum PriceTrend {
+  RISING
+  STABLE
+  FALLING
+  VOLATILE
+}
+
+model CustomsRate {
+  id             String   @id @default(cuid())
+  hs_code        String
+  from_country   String
+  to_country     String
+  rate_pct       Decimal  @db.Decimal(5, 2)
+  fixed_fee      Decimal  @default(0) @db.Decimal(10, 2)
+  currency       Currency @default(USD)
+  notes          String?
+  source_url     String?
+  effective_from DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  @@unique([hs_code, from_country, to_country])
+  @@map("customs_rates")
+}
+
+model LogisticsRoute {
+  id            String   @id @default(cuid())
+  from_country  String
+  to_country    String
+  carrier_name  String?
+  cost_per_kg   Decimal  @db.Decimal(8, 4)
+  min_weight_kg Decimal?
+  currency      Currency @default(USD)
+  transit_days  Int
+  route_notes   String?
+  is_active     Boolean  @default(true)
+  updated_at    DateTime @updatedAt
+
+  @@index([from_country, to_country])
+  @@map("logistics_routes")
+}
+
+model ExchangeRate {
+  id          String   @id @default(cuid())
+  from_cur    Currency
+  to_cur      Currency
+  rate        Decimal  @db.Decimal(16, 8)
+  recorded_at DateTime @default(now())
+
+  @@index([from_cur, to_cur, recorded_at(sort: Desc)])
+  @@map("exchange_rates")
+}
+
+model TradeJournalEntry {
+  id                 String        @id @default(cuid())
+  user_id            String
+  product_id         String
+  product_name       String
+  supplier_name      String?
+  buy_marketplace    String?
+  sell_marketplace   String?
+  buy_price          Decimal       @db.Decimal(12, 4)
+  buy_currency       Currency      @default(USD)
+  buy_price_usd      Decimal       @db.Decimal(12, 4)
+  sell_price         Decimal?      @db.Decimal(12, 4)
+  sell_currency      Currency?
+  sell_price_usd     Decimal?      @db.Decimal(12, 4)
+  quantity           Decimal       @db.Decimal(12, 3)
+  unit               ProductUnit   @default(KG)
+  logistics_cost     Decimal?      @db.Decimal(10, 2)
+  customs_cost       Decimal?      @db.Decimal(10, 2)
+  platform_fee       Decimal?      @db.Decimal(10, 2)
+  other_costs        Decimal?      @db.Decimal(10, 2)
+  total_investment   Decimal?      @db.Decimal(12, 2)
+  total_revenue      Decimal?      @db.Decimal(12, 2)
+  profit             Decimal?      @db.Decimal(12, 2)
+  roi_actual         Decimal?      @db.Decimal(6, 2)
+  status             JournalStatus @default(PLANNED)
+  planned_margin_pct Decimal?      @db.Decimal(6, 2)
+  buy_date           DateTime?
+  expected_sell_date DateTime?
+  actual_sell_date   DateTime?
+  notes              String?
+  created_at         DateTime      @default(now())
+  updated_at         DateTime      @updatedAt
+
+  user               User          @relation(fields: [user_id], references: [id])
+  product            Product       @relation(fields: [product_id], references: [id])
+  stages             JournalStage[]
+
+  @@index([user_id, status])
+  @@map("trade_journal")
+}
+
+enum JournalStatus {
+  PLANNED
+  ORDERED
+  PAID
+  SHIPPED
+  RECEIVED
+  LISTED
+  SOLD
+  CANCELLED
+}
+
+model JournalStage {
+  id          String            @id @default(cuid())
+  entry_id    String
+  status      JournalStatus
+  notes       String?
+  occurred_at DateTime          @default(now())
+
+  entry       TradeJournalEntry @relation(fields: [entry_id], references: [id], onDelete: Cascade)
+
+  @@map("journal_stages")
+}
+
+model Alert {
+  id            String         @id @default(cuid())
+  user_id       String
+  product_id    String
+  type          AlertType
+  condition     AlertCondition
+  threshold     Decimal        @db.Decimal(8, 2)
+  marketplace   String?
+  is_active     Boolean        @default(true)
+  triggered_at  DateTime?
+  trigger_count Int            @default(0)
+  created_at    DateTime       @default(now())
+
+  user          User           @relation(fields: [user_id], references: [id])
+  product       Product        @relation(fields: [product_id], references: [id])
+
+  @@index([user_id, is_active])
+  @@map("alerts")
+}
+
+enum AlertType {
+  MARGIN_THRESHOLD
+  PRICE_DROP
+  PRICE_RISE
+  WINDOW_OPENED
+  NEW_SUPPLIER
+}
+
+enum AlertCondition {
+  ABOVE
+  BELOW
+}
+
+model Notification {
+  id         String         @id @default(cuid())
+  user_id    String
+  type       NotifType
+  title      String
+  body       String
+  payload    Json?
+  read       Boolean        @default(false)
+  channels   NotifChannel[]
+  created_at DateTime       @default(now())
+
+  user       User           @relation(fields: [user_id], references: [id])
+
+  @@index([user_id, read, created_at(sort: Desc)])
+  @@map("notifications")
+}
+
+enum NotifType {
+  ALERT_TRIGGERED
+  WEEKLY_DIGEST
+  PRICE_UPDATE
+  COACH_INSIGHT
+  SYSTEM
+  WELCOME
+}
+
+enum NotifChannel {
+  IN_APP
+  TELEGRAM
+  EMAIL
+}
+
+model BotSubmission {
+  id               String              @id @default(cuid())
+  supplier_id      String
+  telegram_msg_id  String?
+  content_type     BotContentType
+  raw_text         String?
+  file_url         String?
+  file_size        Int?
+  parsed_json      Json?
+  items_parsed     Int                 @default(0)
+  items_accepted   Int                 @default(0)
+  status           BotSubmissionStatus @default(PENDING)
+  error_message    String?
+  claude_tokens    Int?
+  requires_confirm Boolean             @default(false)
+  created_at       DateTime            @default(now())
+  processed_at     DateTime?
+
+  supplier         Supplier            @relation(fields: [supplier_id], references: [id])
+
+  @@index([supplier_id, status])
+  @@map("bot_submissions")
+}
+
+enum BotContentType {
+  TEXT
+  PHOTO
+  PDF
+  EXCEL
+  QUICK_COMMAND
+}
+
+enum BotSubmissionStatus {
+  PENDING
+  PROCESSING
+  PARSED
+  NEEDS_CONFIRM
+  ACCEPTED
+  FAILED
+  REJECTED
+}
+
+model BotSession {
+  telegram_id BigInt      @id
+  user_type   BotUserType
+  state       String?
+  state_data  Json?
+  linked_id   String?
+  created_at  DateTime    @default(now())
+  updated_at  DateTime    @updatedAt
+
+  @@map("bot_sessions")
+}
+
+enum BotUserType {
+  TRADER
+  SUPPLIER
+  UNREGISTERED
+}
+
+model AICoachSession {
+  id           String   @id @default(cuid())
+  user_id      String
+  messages     Json
+  context_snap Json?
+  total_tokens Int      @default(0)
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  user         User     @relation(fields: [user_id], references: [id])
+
+  @@index([user_id, updated_at(sort: Desc)])
+  @@map("ai_coach_sessions")
+}
+
+model SchoolContent {
+  id           String      @id @default(cuid())
+  type         ContentType
+  title_ru     String
+  title_en     String?
+  slug         String      @unique
+  body_ru      String      @db.Text
+  summary      String?
+  category_id  String?
+  tags         String[]
+  route_tag    String?
+  min_plan     Plan        @default(FREE)
+  is_published Boolean     @default(false)
+  views        Int         @default(0)
+  sort_order   Int         @default(0)
+  created_at   DateTime    @default(now())
+  updated_at   DateTime    @updatedAt
+
+  @@index([type, is_published])
+  @@map("school_content")
+}
+
+enum ContentType {
+  NICHE_ANALYSIS
+  CASE_STUDY
+  CUSTOMS_GUIDE
+  SIMULATOR
+  DIGEST
+  VIDEO
+  WEBINAR
+}
+
+model ParseJob {
+  id          String      @id @default(cuid())
+  marketplace Marketplace
+  status      JobStatus   @default(QUEUED)
+  items_found Int         @default(0)
+  items_saved Int         @default(0)
+  error       String?
+  started_at  DateTime?
+  finished_at DateTime?
+  created_at  DateTime    @default(now())
+
+  @@map("parse_jobs")
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+  SKIPPED
+}

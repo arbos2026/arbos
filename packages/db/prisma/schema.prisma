@@ -385,22 +385,172 @@ enum PriceTrend {
   VOLATILE
 }
 
-model CustomsRate {
-  id             String   @id @default(cuid())
-  hs_code        String
-  from_country   String
-  to_country     String
-  rate_pct       Decimal  @db.Decimal(5, 2)
-  fixed_fee      Decimal  @default(0) @db.Decimal(10, 2)
-  currency       Currency @default(USD)
-  notes          String?
-  source_url     String?
-  effective_from DateTime @default(now())
-  updated_at     DateTime @updatedAt
+// ─────────────────────────────────────────────
+// CUSTOMS ENGINE — ЕАЭС
+// ─────────────────────────────────────────────
 
-  @@unique([hs_code, from_country, to_country])
+// Единый таможенный тариф ЕАЭС (одинаков для всех 5 стран)
+model CustomsRate {
+  id           String   @id @default(cuid())
+  hs_code      String   // "0802.32" или "0802.32.000.0"
+  description  String
+  rate_type    RateType
+  rate_pct     Decimal? @db.Decimal(8, 4) // % от ТС (ad valorem)
+  rate_specific Decimal? @db.Decimal(10, 6) // EUR или USD за ед.
+  rate_specific_currency String? @default("EUR")
+  rate_specific_unit String? // "kg", "unit", "cm3", "litre", "tonne"
+  rate_min_pct Decimal? @db.Decimal(8, 4) // мин % (для COMBINED)
+  has_antidumping Boolean @default(false)
+  notes        String?
+  updated_at   DateTime @updatedAt
+
+  antidumping  CustomsAntidumping[]
+
+  @@unique([hs_code])
+  @@index([hs_code])
   @@map("customs_rates")
 }
+
+enum RateType {
+  AD_VALOREM   // % от таможенной стоимости
+  SPECIFIC     // EUR(USD) за кг/шт/см³
+  COMBINED     // берём max из (% от ТС) и (EUR/кг)
+  ZERO         // нулевая ставка
+}
+
+// Антидемпинговые пошлины (решения ЕЭК)
+model CustomsAntidumping {
+  id           String   @id @default(cuid())
+  hs_code      String
+  origin_country String // страна производитель
+  rate_pct     Decimal  @db.Decimal(8, 4)
+  decision_ref String   // "Решение ЕЭК №154 от 17.11.2015"
+  valid_from   DateTime
+  valid_until  DateTime?
+  notes        String?
+
+  rate         CustomsRate @relation(fields: [hs_code], references: [hs_code])
+
+  @@index([hs_code, origin_country])
+  @@map("customs_antidumping")
+}
+
+// Таможенные сборы — разные для каждой страны ЕАЭС
+model CustomsFee {
+  id           String   @id @default(cuid())
+  country      String   // KG, KZ, RU, BY, AM
+  fee_type     FeeType
+  range_from   Decimal  @db.Decimal(16, 2) // от X сом/руб/тенге
+  range_to     Decimal? @db.Decimal(16, 2) // до Y (null = без лимита)
+  fee_pct      Decimal? @db.Decimal(8, 4)  // % от ТС (KG = 0.4%)
+  fee_fixed    Decimal? @db.Decimal(12, 2) // фиксированная сумма
+  fee_min      Decimal  @db.Decimal(12, 2) // минимум
+  fee_max      Decimal? @db.Decimal(12, 2) // максимум (KG = 250,000)
+  currency     String   // KGS, KZT, RUB, AMD, BYR
+  notes        String?
+
+  @@index([country])
+  @@map("customs_fees")
+}
+
+enum FeeType {
+  PERCENTAGE   // % от ТС (KG, RU)
+  FIXED_RANGE  // фиксированная по диапазону ТС (KZ, BY, AM)
+}
+
+// НДС по странам ЕАЭС
+model CustomsVAT {
+  id           String   @id @default(cuid())
+  country      String   @unique
+  rate_pct     Decimal  @db.Decimal(5, 2)
+  currency     String
+  notes        String?
+
+  exemptions   CustomsVATExemption[]
+
+  @@map("customs_vat")
+}
+
+// Льготы по НДС (ст 301 НК КР для KG, своё для KZ и т.д.)
+model CustomsVATExemption {
+  id           String   @id @default(cuid())
+  country      String
+  hs_code      String?  // null = все товары данной категории
+  exemption_type ExemptionType
+  condition    String?  // "стоимость >= 500,000 сом за единицу"
+  law_ref      String   // "ст 301 НК КР"
+  notes        String?
+
+  vat          CustomsVAT @relation(fields: [country], references: [country])
+
+  @@index([country, hs_code])
+  @@map("customs_vat_exemptions")
+}
+
+enum ExemptionType {
+  FIXED_ASSETS        // основные средства (ст 301 НК КР)
+  SEEDS               // семенные культуры (ст 298 НК КР)
+  DIPLOMATIC          // дипломатический иммунитет
+  MEDICAL_EQUIPMENT   // медоборудование
+  SPECIAL_ECONOMIC    // СЭЗ
+}
+
+// Преференции по происхождению товара
+model CustomsPreference {
+  id               String   @id @default(cuid())
+  origin_country   String   // страна происхождения (UA, TM, UZ...)
+  cert_type        CertType
+  duty_multiplier  Decimal  @db.Decimal(5, 4) // 0=нулевая, 0.75=75% от ЕТТ
+  decision_ref     String?  // "Решение ЕЭК №99 от 05.10.2021"
+  condition        String?  // "только при поставке напрямую"
+  notes            String?
+
+  @@unique([origin_country, cert_type])
+  @@map("customs_preferences")
+}
+
+enum CertType {
+  CT1         // зона свободной торговли СНГ → 0%
+  FORM_A      // развивающиеся страны → 75% от ЕТТ
+  FORM_A_ZERO // наименее развитые страны → 0% (Решение N99)
+  GENERAL     // общая форма → полная ставка ЕТТ
+  NONE        // нет сертификата → полная ставка
+}
+
+// Акцизы — разные по странам
+model CustomsExcise {
+  id           String   @id @default(cuid())
+  country      String
+  hs_code      String
+  description  String
+  rate         Decimal  @db.Decimal(12, 4)
+  unit         String   // "som_per_tonne", "pct", "som_per_litre"
+  currency     String
+  notes        String?
+
+  @@unique([country, hs_code])
+  @@index([country, hs_code])
+  @@map("customs_excise")
+}
+
+// Логистические маршруты (обновляем существующую)
+model LogisticsRoute {
+  id            String   @id @default(cuid())
+  from_country  String
+  to_country    String
+  carrier_name  String?
+  cost_per_kg   Decimal  @db.Decimal(8, 4)
+  min_weight_kg Decimal?
+  currency      Currency @default(USD)
+  transit_days  Int
+  route_notes   String?
+  is_active     Boolean  @default(true)
+  updated_at    DateTime @updatedAt
+
+  @@index([from_country, to_country])
+  @@map("logistics_routes")
+}
+
 
 model LogisticsRoute {
   id            String   @id @default(cuid())
